@@ -1,0 +1,27 @@
+# Core dependencies
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# Backend API (optional - for future use)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# AI Integration (optional - requires GENAI_API_KEY)
+# Use the Gemini API v1 SDK (preferred)
+google-genai>=0.3.0
+
+# ChatGPT (OpenAI) integration (optional - requires GPT_API_SECRET)
+openai>=1.0.0
+
+# Live market prices (Yahoo Finance)
+yfinance>=0.2.40
+
+# PDF Generation (for Research Assistant)
+markdown>=3.5.0
+weasyprint>=60.0

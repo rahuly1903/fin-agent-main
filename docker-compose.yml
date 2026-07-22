@@ -1,0 +1,90 @@
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    container_name: fin_agent_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-fin_agent}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # Expose for local development
+    networks:
+      - fin_network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-fin_agent}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Database Migrations (run once and exit)
+  migrate:
+    image: migrate/migrate:latest
+    container_name: fin_agent_migrate
+    volumes:
+      - ./db_migrations:/migrations:ro
+    command: [ "-path", "/migrations", "-database", "postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-fin_agent}?sslmode=disable", "up" ]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - fin_network
+    restart: "no"
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fin_agent_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-fin_agent}
+      GENAI_API_KEY: ${GENAI_API_KEY}
+      GPT_API_SECRET: ${GPT_API_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - fin_network
+    # No external port - accessed via nginx
+
+    # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fin_agent_frontend
+    restart: unless-stopped
+    # Note: NEXT_PUBLIC_* vars are build-time only in Next.js
+    # API calls now use relative paths (proxied by nginx)
+    depends_on:
+      - backend
+    networks:
+      - fin_network
+    # No external port - accessed via nginx
+
+    # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: fin_agent_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - fin_network
+
+networks:
+  fin_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
