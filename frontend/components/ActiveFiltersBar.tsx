@@ -53,7 +53,8 @@ function buildChips(filters: FilterState, handleDelete: (key: string) => void) {
     ['peMax', 'P/E <', 'x'],
     ['priceToFcfMax', 'Price/FCF <', 'x'],
     ['evToEbitdaMax', 'EV/EBITDA <', 'x'],
-    ['debtToEbitdaMax', 'Debt/EBITDA <', 'x']
+    ['debtToEbitdaMax', 'Debt/EBITDA <', 'x'],
+    ['irrMax', 'IRR ≤', '%']
   ];
   numericMaxes.forEach(([k, label, suffix]) => {
     const value = filters[k] as number | null | undefined;
