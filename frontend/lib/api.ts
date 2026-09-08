@@ -57,7 +57,8 @@ export async function fetchTopIrr(params: {
       stockReturns5yMin: params.filters.stockReturns5yMin,
       stockReturns10yMin: params.filters.stockReturns10yMin,
       assignedExitMultipleMin: params.filters.assignedExitMultipleMin,
-      irrMin: params.filters.irrMin
+      irrMin: params.filters.irrMin,
+      irrMax: params.filters.irrMax
     }
   };
   const res = await fetch(url, {

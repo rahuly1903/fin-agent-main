@@ -54,10 +54,11 @@ log = setup_logging(
 )
 
 # -----------------------------------------------------------------------------
-# External price (yfinance) helpers
+# External quote (yfinance) helpers — price + market cap in one Ticker call
 # -----------------------------------------------------------------------------
 _YFINANCE_CACHE_TTL_S = int(os.getenv("YFINANCE_CACHE_TTL_S", os.getenv("STOOQ_CACHE_TTL_S", "21600")))  # 6 hours
-_yfinance_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (fetched_at_epoch_s, price)
+# symbol -> (fetched_at_epoch_s, price, market_cap_usd)
+_yfinance_cache: Dict[str, Tuple[float, Optional[float], Optional[float]]] = {}
 
 
 def _bloomberg_ticker_to_yahoo_symbol(ticker: str) -> Optional[str]:
@@ -77,43 +78,87 @@ def _bloomberg_ticker_to_yahoo_symbol(ticker: str) -> Optional[str]:
 	return root.replace("/", "-").upper()
 
 
-def _fetch_yfinance_close(symbol: str) -> Optional[float]:
+def _fast_info_get(fi: Any, *keys: str) -> Optional[Any]:
+	for key in keys:
+		val = None
+		try:
+			val = fi[key]
+		except Exception:
+			val = getattr(fi, key, None)
+		if val is None and hasattr(fi, "get"):
+			try:
+				val = fi.get(key)
+			except Exception:
+				val = None
+		if val is not None:
+			return val
+	return None
+
+
+def _positive_float(value: Any) -> Optional[float]:
+	if value is None:
+		return None
+	try:
+		num = float(value)
+	except (TypeError, ValueError):
+		return None
+	if num <= 0:
+		return None
+	return num
+
+
+def _fetch_yfinance_quote(symbol: str) -> Tuple[Optional[float], Optional[float]]:
 	"""
-	Fetch most recent price from Yahoo Finance via yfinance.
-	Symbol example: 'AAPL'
+	Fetch most recent price and market cap (USD) from Yahoo Finance in one call.
+	Returns (price, market_cap_usd). Either value may be None.
 	"""
 	try:
 		import yfinance as yf  # type: ignore
 	except Exception:
-		return None
+		return None, None
+	price: Optional[float] = None
+	market_cap: Optional[float] = None
 	try:
 		t = yf.Ticker(symbol)
-		# Prefer fast_info last price when available
 		try:
 			fi = getattr(t, "fast_info", None)
 			if fi is not None:
-				price = getattr(fi, "last_price", None)
-				if price is None and hasattr(fi, "get"):
-					price = fi.get("last_price")
-				if price is not None:
-					price = float(price)
-					if price > 0:
-						return price
+				price = _positive_float(_fast_info_get(fi, "last_price"))
+				market_cap = _positive_float(_fast_info_get(fi, "market_cap", "marketCap"))
 		except Exception:
 			pass
-		# Fallback: recent daily history close
-		hist = t.history(period="5d")
-		if hist is None or hist.empty:
-			return None
-		closes = hist["Close"].dropna()
-		if closes.empty:
-			return None
-		price = float(closes.iloc[-1])
-		if price <= 0:
-			return None
-		return price
+		if price is None:
+			hist = t.history(period="5d")
+			if hist is not None and not hist.empty:
+				closes = hist["Close"].dropna()
+				if not closes.empty:
+					price = _positive_float(closes.iloc[-1])
 	except Exception:
-		return None
+		return None, None
+	return price, market_cap
+
+
+def get_yfinance_quote(ticker: str) -> Tuple[Optional[float], Optional[float]]:
+	"""
+	Get recent price and market cap (USD billions) from Yahoo Finance, with caching.
+	Returns (price, market_cap_bn). Either value may be None.
+	"""
+	symbol = _bloomberg_ticker_to_yahoo_symbol(ticker)
+	if not symbol:
+		return None, None
+	now = time.time()
+	cached = _yfinance_cache.get(symbol)
+	if cached:
+		ts, price, market_cap_usd = cached
+		if now - ts <= _YFINANCE_CACHE_TTL_S:
+			mcap_bn = (market_cap_usd / 1e9) if market_cap_usd else None
+			return price, mcap_bn
+	price, market_cap_usd = _fetch_yfinance_quote(symbol)
+	if price is None and market_cap_usd is None:
+		return None, None
+	_yfinance_cache[symbol] = (now, price, market_cap_usd)
+	mcap_bn = (market_cap_usd / 1e9) if market_cap_usd else None
+	return price, mcap_bn
 
 
 def get_current_price_yfinance(ticker: str) -> Optional[float]:
@@ -121,18 +166,7 @@ def get_current_price_yfinance(ticker: str) -> Optional[float]:
 	Get a recent price from Yahoo Finance (yfinance), with in-memory caching.
 	Returns None if unavailable.
 	"""
-	symbol = _bloomberg_ticker_to_yahoo_symbol(ticker)
-	if not symbol:
-		return None
-	now = time.time()
-	if symbol in _yfinance_cache:
-		ts, price = _yfinance_cache[symbol]
-		if now - ts <= _YFINANCE_CACHE_TTL_S:
-			return price
-	price = _fetch_yfinance_close(symbol)
-	if price is None:
-		return None
-	_yfinance_cache[symbol] = (now, price)
+	price, _ = get_yfinance_quote(ticker)
 	return price
 
 # Configure CORS for local dev (Next.js on 3000) and production
@@ -264,6 +298,7 @@ class FiltersPayload(BaseModel):
 	# Model-Driven Outputs
 	assignedExitMultipleMin: Optional[float] = None
 	irrMin: Optional[float] = None
+	irrMax: Optional[float] = None
 
 
 class TopIrrRequest(BaseModel):
@@ -1750,6 +1785,17 @@ def api_top_irr_post(payload: TopIrrRequest = Body(...)):
 			entry["result"] = out
 			return out
 
+		# Drop names already above irrMax (DB IRR) so live quotes are spent on survivors
+		if payload.filters and payload.filters.irrMax is not None:
+			scored = [
+				x for x in scored
+				if x[0].irr is not None and x[0].irr <= payload.filters.irrMax
+			]
+			if not scored:
+				out = TopIrrResponse(companies=[], analysis="No companies match the max IRR filter.")
+				entry["result"] = out
+				return out
+
 		# Step 4: optional yfinance rerank for top-N only (avoid hundreds of HTTP calls)
 		# USE_YFINANCE_PRICE preferred; USE_STOOQ_PRICE kept as legacy alias
 		use_live = (
@@ -1766,7 +1812,9 @@ def api_top_irr_post(payload: TopIrrRequest = Body(...)):
 		if use_live and subset_n > 0:
 			updated: List[Tuple[CompanyIrr, float, float, float]] = []
 			for (ci, irr_db, exit_price, db_price) in scored[:subset_n]:
-				ext = get_current_price_yfinance(ci.ticker)
+				ext, mcap_bn = get_yfinance_quote(ci.ticker)
+				if mcap_bn is not None and mcap_bn > 0:
+					ci.market_cap = float(mcap_bn)
 				if ext is not None and ext > 0:
 					try:
 						years_to_exit = max(1, int(horizon_years))
@@ -1783,6 +1831,13 @@ def api_top_irr_post(payload: TopIrrRequest = Body(...)):
 				updated.append((ci, irr_db, exit_price, db_price))
 			scored = updated + scored[subset_n:]
 
+		# Apply projected-IRR max after live quotes so the table matches the filter
+		if payload.filters and payload.filters.irrMax is not None:
+			scored = [
+				x for x in scored
+				if x[0].irr is not None and x[0].irr <= payload.filters.irrMax
+			]
+
 		# Final rank by (possibly updated) IRR
 		scored.sort(key=lambda x: x[0].irr if x[0].irr is not None else float("-inf"), reverse=True)
 		top_companies = [ci for (ci, _, _, _) in scored[:limit]]
@@ -1794,7 +1849,7 @@ def api_top_irr_post(payload: TopIrrRequest = Body(...)):
 				log.log_financial_action(
 					action="price_lookup",
 					ticker=ci.ticker,
-					details={"source": src, "yahoo_symbol": sym, "price": p}
+					details={"source": src, "yahoo_symbol": sym, "price": p, "market_cap_bn": ci.market_cap}
 				)
 
 		# No extra trend-analysis call; "reason" is in exit_pe_notes/breakdown

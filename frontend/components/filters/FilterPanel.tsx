@@ -120,6 +120,7 @@ export default function FilterPanel() {
         <Grid container spacing={1.5}>
           <Grid item xs={6}><NumericField label="Assigned Exit Multiple >" value={filters.assignedExitMultipleMin} onChange={(v) => setFilters((f) => ({ ...f, assignedExitMultipleMin: v }))} adornment="x" step={0.1} /></Grid>
           <Grid item xs={6}><NumericField label="IRR >" value={filters.irrMin} onChange={(v) => setFilters((f) => ({ ...f, irrMin: v }))} adornment="%" step={0.1} /></Grid>
+          <Grid item xs={6}><NumericField label="IRR ≤" value={filters.irrMax} onChange={(v) => setFilters((f) => ({ ...f, irrMax: v }))} adornment="%" step={0.1} /></Grid>
         </Grid>
       </Section>
 

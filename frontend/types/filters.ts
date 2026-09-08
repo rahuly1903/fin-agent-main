@@ -51,6 +51,7 @@ export type FilterState = {
   // Model-Driven Outputs
   assignedExitMultipleMin?: number | null;
   irrMin?: number | null;
+  irrMax?: number | null;
 };
 
 export const defaultFilterState: FilterState = {
@@ -78,6 +79,7 @@ export const defaultFilterState: FilterState = {
   stockReturns5yMin: null,
   stockReturns10yMin: null,
   assignedExitMultipleMin: null,
-  irrMin: null
+  irrMin: null,
+  irrMax: null
 };
 
