@@ -80,6 +80,6 @@ export const defaultFilterState: FilterState = {
   stockReturns10yMin: null,
   assignedExitMultipleMin: null,
   irrMin: null,
-  irrMax: null
+  irrMax: 50
 };
 
